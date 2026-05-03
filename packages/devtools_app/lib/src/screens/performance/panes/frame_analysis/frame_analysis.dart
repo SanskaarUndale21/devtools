@@ -131,6 +131,9 @@ class FlutterFrameAnalysisView extends StatelessWidget {
               child: RebuildTable(
                 metricNames: const ['Rebuild Count'],
                 metrics: combineStats([rebuilds]),
+                metricTotals: [
+                  rebuilds.fold(0, (sum, r) => sum + r.buildCount),
+                ],
               ),
             ),
           ],

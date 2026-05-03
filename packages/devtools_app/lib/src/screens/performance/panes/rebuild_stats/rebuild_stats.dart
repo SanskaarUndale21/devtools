@@ -38,6 +38,7 @@ class _RebuildStatsViewState extends State<RebuildStatsView>
     with AutoDisposeMixin {
   var metricNames = const <String>[];
   var metrics = const <RebuildLocationStats>[];
+  var metricTotals = const <int>[];
 
   @override
   void initState() {
@@ -84,9 +85,14 @@ class _RebuildStatsViewState extends State<RebuildStatsView>
     names.add('Overall');
     data.add(widget.model.locationStats.value);
 
+    final totals = data
+        .map((list) => list.fold<int>(0, (sum, r) => sum + r.buildCount))
+        .toList();
+
     setState(() {
       metrics = combineStats(data);
       metricNames = names;
+      metricTotals = totals;
     });
   }
 
@@ -138,13 +144,27 @@ class _RebuildStatsViewState extends State<RebuildStatsView>
               if (metrics.isEmpty) {
                 return const Center(
                   child: Text('Interact with the app to trigger rebuilds.'),
-                ); // No data to display but there should be data soon.
+                );
               }
-              return RebuildTable(
-                key: const Key('Rebuild Table'),
-                metricNames: metricNames,
-                metrics: metrics,
-                includeBorder: false,
+              return Column(
+                children: [
+                  if (metricTotals.isNotEmpty && metricTotals.first > 0)
+                    _TopBottlenecksBanner(
+                      metrics: metrics,
+                      metricIndex: 0,
+                      total: metricTotals.first,
+                      frameLabel: metricNames.first,
+                    ),
+                  Expanded(
+                    child: RebuildTable(
+                      key: const Key('Rebuild Table'),
+                      metricNames: metricNames,
+                      metrics: metrics,
+                      metricTotals: metricTotals,
+                      includeBorder: false,
+                    ),
+                  ),
+                ],
               );
             },
           ),
@@ -154,16 +174,127 @@ class _RebuildStatsViewState extends State<RebuildStatsView>
   }
 }
 
+/// Banner showing the top rebuilding widgets for the current frame so users
+/// can quickly spot potential performance bottlenecks without scanning the
+/// full table.
+class _TopBottlenecksBanner extends StatelessWidget {
+  const _TopBottlenecksBanner({
+    required this.metrics,
+    required this.metricIndex,
+    required this.total,
+    required this.frameLabel,
+  });
+
+  final List<RebuildLocationStats> metrics;
+  final int metricIndex;
+  final int total;
+  final String frameLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final top = (metrics
+              .where((m) => m.buildCounts[metricIndex] > 0)
+              .toList()
+            ..sort(
+              (a, b) => b.buildCounts[metricIndex].compareTo(
+                a.buildCounts[metricIndex],
+              ),
+            ))
+        .take(3)
+        .toList();
+
+    if (top.isEmpty) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+
+    return OutlineDecoration.onlyBottom(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(
+          horizontal: denseSpacing,
+          vertical: denseSpacing,
+        ),
+        child: Row(
+          children: [
+            const Icon(
+              Icons.trending_up_rounded,
+              size: defaultIconSize,
+              color: Colors.deepOrange,
+            ),
+            const SizedBox(width: denseSpacing),
+            Text(
+              'Top rebuilders ($frameLabel): ',
+              style: theme.regularTextStyle.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Expanded(
+              child: Wrap(
+                spacing: denseSpacing,
+                children: [
+                  for (int i = 0; i < top.length; i++)
+                    _BottleneckChip(
+                      name: top[i].location.name ?? '<unknown>',
+                      count: top[i].buildCounts[metricIndex],
+                      share: top[i].buildCounts[metricIndex] / total,
+                      showSeparator: i > 0,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _BottleneckChip extends StatelessWidget {
+  const _BottleneckChip({
+    required this.name,
+    required this.count,
+    required this.share,
+    required this.showSeparator,
+  });
+
+  final String name;
+  final int count;
+  final double share;
+  final bool showSeparator;
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (share * 100).round();
+    final color =
+        share >= 0.5
+            ? Colors.red
+            : share >= 0.25
+            ? Colors.deepOrange
+            : Theme.of(context).colorScheme.onSurface;
+    return Text(
+      '${showSeparator ? '· ' : ''}$name ($count rebuilds, $pct%)',
+      style: Theme.of(
+        context,
+      ).regularTextStyle.copyWith(color: color),
+    );
+  }
+}
+
 class RebuildTable extends StatefulWidget {
   const RebuildTable({
     super.key,
     required this.metricNames,
     required this.metrics,
+    this.metricTotals = const [],
     this.includeBorder = true,
   });
 
   final List<String> metricNames;
   final List<RebuildLocationStats> metrics;
+
+  /// Total rebuild counts per metric column, used to compute percentage share.
+  /// When empty, percentage display is suppressed.
+  final List<int> metricTotals;
+
   final bool includeBorder;
 
   @override
@@ -188,6 +319,9 @@ class _RebuildTableState extends State<RebuildTable> {
         cached = _RebuildCountColumn(name, i);
         _columnCache[name] = cached;
       }
+      // Update total on each build so percentage display stays current.
+      cached.total =
+          i < widget.metricTotals.length ? widget.metricTotals[i] : 0;
       columns.add(cached);
     }
     return columns;
@@ -261,9 +395,13 @@ class _LocationColumn extends ColumnData<RebuildLocationStats> {
 }
 
 class _RebuildCountColumn extends ColumnData<RebuildLocationStats> {
-  _RebuildCountColumn(super.name, this.metricIndex) : super(fixedWidthPx: 130);
+  _RebuildCountColumn(super.name, this.metricIndex) : super(fixedWidthPx: 160);
 
   final int metricIndex;
+
+  /// Total rebuild count for this metric; set by [_RebuildTableState] before
+  /// each build so that percentage share can be computed per row.
+  int total = 0;
 
   @override
   bool get numeric => true;
@@ -271,4 +409,23 @@ class _RebuildCountColumn extends ColumnData<RebuildLocationStats> {
   @override
   int getValue(RebuildLocationStats dataObject) =>
       dataObject.buildCounts[metricIndex];
+
+  @override
+  String getDisplayValue(RebuildLocationStats dataObject) {
+    final count = dataObject.buildCounts[metricIndex];
+    if (total <= 0 || count == 0) return '$count';
+    final pct = (count / total * 100).round();
+    return '$count ($pct%)';
+  }
+
+  /// Color-codes rows by their share of the total rebuild count so that
+  /// performance bottlenecks are immediately visible.
+  @override
+  Color? getTextColor(RebuildLocationStats dataObject) {
+    if (total <= 0) return null;
+    final share = dataObject.buildCounts[metricIndex] / total;
+    if (share >= 0.5) return Colors.red;
+    if (share >= 0.25) return Colors.deepOrange;
+    return null;
+  }
 }
