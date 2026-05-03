@@ -11,6 +11,7 @@ import '../../../../shared/analytics/constants.dart' as gac;
 import '../../../../shared/globals.dart';
 import '../../../../shared/memory/gc_stats.dart';
 import '../../../../shared/primitives/byte_utils.dart';
+import '../../../../shared/primitives/flutter_widgets/linked_scroll_controller.dart';
 import '../../../../shared/primitives/simple_items.dart';
 import '../../../../shared/primitives/utils.dart';
 import '../../../../shared/table/table.dart';
@@ -353,7 +354,12 @@ class _GCLatencyColumn extends _GCHeapStatsColumn {
 }
 
 class _GCStatsTable extends StatelessWidget {
-  const _GCStatsTable({required this.controller});
+  const _GCStatsTable({
+    required this.controller,
+    required this.horizontalScrollController,
+  });
+
+  final ScrollController horizontalScrollController;
 
   static final _columnGroup = [
     ColumnGroup.fromText(title: '', range: const Range(0, 1)),
@@ -405,6 +411,7 @@ class _GCStatsTable extends StatelessWidget {
             defaultSortColumn: _columns.first,
             defaultSortDirection: SortDirection.ascending,
             sizeColumnsToFit: false,
+            horizontalScrollController: horizontalScrollController,
           ),
         );
       },
@@ -429,9 +436,19 @@ class AllocationProfileTableViewState
     extends State<AllocationProfileTableView> {
   static const _scrollbarHeight = 10.0;
 
+  // LinkedScrollControllerGroup syncs ALL horizontal scroll interactions
+  // (scrollbar drag, mouse wheel, touchpad) between the GC stats row and the
+  // allocation profile table. Each table gets its own _LinkedScrollController
+  // from the group; the group wires them together at the ScrollPosition level.
+  final _scrollGroup = LinkedScrollControllerGroup();
+  late final ScrollController _gcHScroll;
+  late final ScrollController _profileHScroll;
+
   @override
   void initState() {
     super.initState();
+    _gcHScroll = _scrollGroup.addAndGet();
+    _profileHScroll = _scrollGroup.addAndGet();
     widget.controller.init();
   }
 
@@ -441,6 +458,13 @@ class AllocationProfileTableViewState
     if (oldWidget.controller != widget.controller) {
       widget.controller.init();
     }
+  }
+
+  @override
+  void dispose() {
+    _gcHScroll.dispose();
+    _profileHScroll.dispose();
+    super.dispose();
   }
 
   @override
@@ -466,21 +490,34 @@ class AllocationProfileTableViewState
                       defaultRowHeight +
                       defaultHeaderHeight * 2 +
                       _scrollbarHeight,
-                  child: _GCStatsTable(controller: widget.controller),
+                  child: _GCStatsTable(
+                    controller: widget.controller,
+                    horizontalScrollController: _gcHScroll,
+                  ),
                 ),
                 const ThickDivider(),
               ],
             );
           },
         ),
-        Expanded(child: _AllocationProfileTable(controller: widget.controller)),
+        Expanded(
+          child: _AllocationProfileTable(
+            controller: widget.controller,
+            horizontalScrollController: _profileHScroll,
+          ),
+        ),
       ],
     );
   }
 }
 
 class _AllocationProfileTable extends StatelessWidget {
-  _AllocationProfileTable({required this.controller});
+  _AllocationProfileTable({
+    required this.controller,
+    required this.horizontalScrollController,
+  });
+
+  final ScrollController horizontalScrollController;
 
   /// List of columns displayed in advanced developer mode state.
   static final _vmModeColumnGroups = [
@@ -559,6 +596,7 @@ class _AllocationProfileTable extends StatelessWidget {
               pinBehavior: FlatTablePinBehavior.pinOriginalToTop,
               includeColumnGroupHeaders: false,
               selectionNotifier: controller.selection,
+              horizontalScrollController: horizontalScrollController,
             );
           },
         );

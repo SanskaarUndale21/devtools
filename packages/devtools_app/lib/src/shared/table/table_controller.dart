@@ -40,7 +40,12 @@ class FlatTableController<T> extends TableControllerBase<T> {
     this.sizeColumnsToFit = true,
     this.sortOriginalData = false,
     this.onDataSorted,
-  });
+    ScrollController? horizontalScrollController,
+  }) {
+    // Pre-populate so that DevToolsTableState.initScrollController() reuses
+    // the provided controller instead of creating a new one.
+    this.horizontalScrollController = horizontalScrollController;
+  }
 
   /// Determines how elements that request to be pinned are displayed.
   ///
@@ -279,11 +284,19 @@ abstract class TableControllerBase<T> extends DisposableController {
 
   ScrollController? horizontalScrollController;
 
+  // Whether this controller created (and therefore owns) the horizontal
+  // scroll controller. False when an external controller was injected so
+  // that dispose() does not close a controller it doesn't own.
+  bool _ownsHorizontalScrollController = false;
+
   void initScrollController([double initialScrollOffset = 0.0]) {
     verticalScrollController = ScrollController(
       initialScrollOffset: initialScrollOffset,
     );
-    horizontalScrollController = ScrollController();
+    if (horizontalScrollController == null) {
+      horizontalScrollController = ScrollController();
+      _ownsHorizontalScrollController = true;
+    }
   }
 
   void storeScrollPosition() {
@@ -360,7 +373,9 @@ abstract class TableControllerBase<T> extends DisposableController {
   void dispose() {
     verticalScrollController?.dispose();
     verticalScrollController = null;
-    horizontalScrollController?.dispose();
+    if (_ownsHorizontalScrollController) {
+      horizontalScrollController?.dispose();
+    }
     horizontalScrollController = null;
     _tableData.dispose();
     super.dispose();
